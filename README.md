@@ -1,5 +1,5 @@
 # gdsplit
-Using gdrive split stdin to named files and uploads. Intended for uploading ZFS snapshots into google drive.
+split stdin to named files and uploads these named chunks to gdrive. Intended for uploading ZFS snapshots into google drive. But can be used for other large streams. It supports a "start at" option to skip the first K chunks. This can be useful restarting a large upload that has partially completed. 
 
 This uses gdrive from Petter Rasmussen's [gdrive](https://github.com/prasmussen/gdrive/blob/master/README.md)
 
