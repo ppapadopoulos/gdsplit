@@ -3,6 +3,21 @@ Using gdrive split stdin to named files and uploads. Intended for uploading ZFS 
 
 This uses gdrive from Petter Rasmussen's [gdrive](https://github.com/prasmussen/gdrive/blob/master/README.md)
 
+```
+gdsplit [-b blksize] [-c chunksize] [-f filebase] [-g gdrive] [-p parent] [-s start] [-5]
+	Split a stream into blksize files and store in google drive
+	files names <filebase>.0000, <filebase>.0001, ....
+Flags:
+	-b blksize   Size of each filesplit [e.g., 8K,1M,1G] (default: 128M)
+	-c chunksize Parameter to gdrive for upload performance tuning [e.g., 8M] (default:32M)
+	-f filebase  Basename of file for storing in gdrive (default: Ztemp)
+	-g gdrive    Path to gdrive executable (default:gdrive)
+	-p parent    Parent id (folder to store files).
+	-s start     Start uploading at starting chunk (default:0)
+	-5           Compute the MD5 sum of each chunk.
+	             Can be used with -s to locally recompute checksums without uploading
+```
+
 * EXAMPLE USING ZFS SEND A SNAPSHOT TO GOOGLE DRIVE
 
 ```
@@ -41,3 +56,42 @@ NAME                    USED  AVAIL  REFER  MOUNTPOINT
 pool1                   210G  49.7T   155G  /pool1
 pool1/cseteaching      1.41G  49.7T  1.41G  /pool1/cseteaching
 ```
+
+* Validation
+Each uploaded chunk can be optionally checksummed (md5) with its checksum
+printed to stderr during upload.  The format of the checksum is identical to
+gdrive info. Used in conjunction with the -s flag, checksums can be locally recomputed and verified against info from gdrive
+
+Example of generating the checksums locally without uploading (-s skips past the first 1000 chunks, chunksize is 512M, -5 computes the md5sum)
+
+```
+zfs send tank/cseteaching@08MAR2017 | ./gdsplit -f cseteaching@08MAR2017 -s 1000 -b 512M -5 2>&1 | grep -e Name: -e Md5sum
+```
+
+Example output from above
+```
+Name: cseteaching@08MAR2017.0000
+Md5sum: 225846bb06b14290635ed4558fbe5a6a
+Name: cseteaching@08MAR2017.0001
+Md5sum: b3cb2010602429bdebc6a5c227bee722
+Name: cseteaching@08MAR2017.0002
+Md5sum: 8ebedeb00e2f0c3f2dfaa46e036de05c
+```
+
+Now, we want to validate the copies in gdrive
+```
+ids=($(gdrive list --query "name contains 'cseteaching'" | sort -k 2 | grep cseteaching@08MAR2017 | awk '{print $1}'))
+for gid in ${ids[@]}; do gdrive info $gid | grep -e Name: -e Md5sum:; done
+```
+
+And this has example output identical to the local copy
+```
+Name: cseteaching@08MAR2017.0000
+Md5sum: 225846bb06b14290635ed4558fbe5a6a
+Name: cseteaching@08MAR2017.0001
+Md5sum: b3cb2010602429bdebc6a5c227bee722
+Name: cseteaching@08MAR2017.0002
+Md5sum: 8ebedeb00e2f0c3f2dfaa46e036de05c
+```
+
+
