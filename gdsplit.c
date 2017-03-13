@@ -21,7 +21,11 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <signal.h>
+#include <errno.h>
 #include <openssl/md5.h>
+#define TRUE 1
+#define FALSE 0
 #define STRMAX 256
 #define KILO 1024
 #define MEGA KILO*KILO
@@ -30,6 +34,7 @@
 #define DEFBLKSIZE 128*MEGA
 #define MAXCHUNKS 10000
 #define PATTERN "%s.%04d"
+#define RETRIES 3
 
 /* Reporting flags */
 #define SILENT 
@@ -42,29 +47,61 @@ typedef struct gd {
 } GDRIVE;
 #define DEFAULTPROG "gdrive"
 
+int failedpipe = FALSE;
+void sighandler(int sig)
+{
+	if (sig == SIGPIPE)
+		failedpipe = TRUE;
+	else
+	 	exit(sig);
+}	
+
 int writegdrive(GDRIVE drive, char *buffer, int bytes, char *parent, char *dest)
 {
 	FILE *output;
 	int error;
+	int mybytes = bytes;
+	char *mybuffer = buffer;
+	int retries = RETRIES;
 	char command[STRMAX + STRMAX ];
 	char options[STRMAX + STRMAX ];
 	options[0] = '\0';
 	if (parent != NULL)
 		sprintf(options,"--parent %s",parent);
 	sprintf(command,"%s upload - --chunksize %d %s %s", drive.progexe,drive.chunksize, options, dest);
-	if (drive.rptflag & INFO)
-		fprintf(stderr,"Executing command %s  (%d bytes to write)\n",command,bytes);
-        output = popen(command,"w");
-	int byteswritten;
-	while( bytes > 0 && 
-		(byteswritten=fwrite(buffer,sizeof(char),bytes,output)) > 0)
+
+	/* register a signal handler if we get a PIPE error */
+	failedpipe=FALSE;
+	signal(SIGPIPE,sighandler);
+
+	while (retries > 0)
 	{
-		bytes -= byteswritten;
+		mybytes = bytes;
+		mybuffer = buffer;
 		if (drive.rptflag & INFO)
-			fprintf(stderr,"wrote %d bytes (%d remaining)\n",byteswritten,bytes);
-		buffer += byteswritten;
+			fprintf(stderr,"Executing command %s  (%d bytes to write)\n",command,mybytes);
+		output = popen(command,"w");
+		int byteswritten;
+		while( !failedpipe && mybytes > 0 && 
+			(byteswritten=fwrite(mybuffer,sizeof(char),mybytes,output)) > 0)
+		{
+			mybytes -= byteswritten;
+			if (drive.rptflag & INFO)
+				fprintf(stderr,"wrote %d bytes (%d remaining)\n",byteswritten,mybytes);
+			mybuffer += byteswritten;
+		}
+		/* check if we completed without a PIPE error */
+		if (pclose(output) == 0 && !failedpipe) break;
+		failedpipe = FALSE;
+		retries--;
+		fprintf(stderr,"Warning: Pipe Error (%d retries remaining)\n",retries); 
 	}
-	pclose(output);
+	signal(SIGPIPE,SIG_DFL);  /* reset to default hander */
+	if (retries == 0) 
+	{
+		exit(ESTRPIPE);  /* exit the program, exhausted retries */ 
+	}
+	return bytes;
 }
 
 
@@ -143,6 +180,7 @@ int main (int argc, char **argv)
 	char *parent = NULL;
 	chunkstr = NULL;
 
+	blkstr = NULL;
 	filebase= "Ztemp";
 	int c;
 	opterr = 0;
@@ -232,7 +270,7 @@ int main (int argc, char **argv)
 	if (buflen > 0)
 	{
 		sprintf(fname,PATTERN,filebase,segment);
-		if (segment >+ startchunk)
+		if (segment >= startchunk)
 		{
 			if (drive.rptflag & INFO) fprintf(stderr,"file chunk %s (%d bytes)\n",fname,buflen);
 			writegdrive(drive, buffer,buflen,parent,fname);
